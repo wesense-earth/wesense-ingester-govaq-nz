@@ -1,0 +1,9 @@
+{
+  "ecan": {
+    "enabled": true,
+    "name": "Environment Canterbury",
+    "adapter": "ecan",
+    "stations_url": "http://data.ecan.govt.nz/data/23/Air/Air%20quality%20sites%20monitored/JSON",
+    "data_url_template": "http://data.ecan.govt.nz/data/29/Air/Air%20quality%20data%20for%20a%20monitored%20site%20(10%20Minute)/JSON?SiteID={site_id}&StartDate={date}&EndDate={date}"
+  }
+}

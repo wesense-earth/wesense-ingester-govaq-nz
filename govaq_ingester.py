@@ -1,0 +1,470 @@
+#!/usr/bin/env python3
+"""
+WeSense Ingester — Government Air Quality (GovAQ)
+
+Polls government air quality monitoring APIs and writes reference-grade
+readings to the WeSense pipeline (gateway + MQTT + Zenoh).
+
+Structured for multiple source adapters (ECan, DEFRA, AirNow, etc.)
+loaded from config/sources.json — similar to the meshtastic ingester's
+multi-region pattern.
+
+Starts with Environment Canterbury (ECan) — 18 stations, 10-minute
+resolution, no auth required.
+"""
+
+import atexit
+import json
+import logging
+import os
+import signal
+import socket
+import sys
+import time
+from datetime import datetime
+
+from wesense_ingester import (
+    DeduplicationCache,
+    ReverseGeocoder,
+    setup_logging,
+)
+from wesense_ingester.clickhouse.writer import ClickHouseConfig
+from wesense_ingester.gateway.client import GatewayClient
+from wesense_ingester.gateway.config import GatewayConfig
+from wesense_ingester.mqtt.publisher import MQTTPublisherConfig, WeSensePublisher
+from wesense_ingester.signing.keys import IngesterKeyManager, KeyConfig
+from wesense_ingester.signing.signer import ReadingSigner
+from wesense_ingester.zenoh.config import ZenohConfig
+from wesense_ingester.zenoh.publisher import ZenohPublisher
+from wesense_ingester.zenoh.queryable import ZenohQueryable
+from wesense_ingester.registry.config import RegistryConfig
+from wesense_ingester.registry.client import RegistryClient
+from wesense_ingester.signing.trust import TrustStore
+
+from adapters.ecan import ECanAdapter
+
+# ── Configuration ────────────────────────────────────────────────────
+INGESTION_NODE_ID = os.getenv("INGESTION_NODE_ID", socket.gethostname())
+POLL_INTERVAL = int(os.getenv("GOVAQ_POLL_INTERVAL", "600"))  # 10 minutes
+STATS_INTERVAL = int(os.getenv("STATS_INTERVAL", "60"))
+DATA_SOURCE = "GOVT_AQ"
+
+# ── Adapter registry ─────────────────────────────────────────────────
+ADAPTER_CLASSES = {
+    "ecan": ECanAdapter,
+}
+
+
+def load_sources_config(config_file: str = "config/sources.json") -> dict:
+    """Load source configs from JSON file."""
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), config_file)
+    try:
+        with open(config_path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print(f"ERROR: Configuration file not found at {config_path}")
+        sys.exit(1)
+    except json.JSONDecodeError as e:
+        print(f"ERROR: Invalid JSON in {config_file}: {e}")
+        sys.exit(1)
+
+
+class GovAQIngester:
+    """
+    Government Air Quality ingester.
+
+    Polls government APIs on a configurable interval and writes
+    reference-grade readings through the WeSense core pipeline.
+    """
+
+    def __init__(self):
+        # Logging
+        self.logger = setup_logging("govaq_ingester")
+
+        # Core components
+        self.dedup = DeduplicationCache()
+        self.geocoder = ReverseGeocoder()
+
+        # Storage gateway
+        self.gateway_client = None
+        try:
+            self.gateway_client = GatewayClient(config=GatewayConfig.from_env())
+        except Exception as e:
+            print(f"Failed to create gateway client: {e}")
+            print("  Continuing without storage (MQTT only)")
+
+        # MQTT publisher for decoded output
+        mqtt_config = MQTTPublisherConfig(
+            broker=os.getenv("WESENSE_OUTPUT_BROKER", os.getenv("MQTT_BROKER", "localhost")),
+            port=int(os.getenv("WESENSE_OUTPUT_PORT", os.getenv("MQTT_PORT", "1883"))),
+            username=os.getenv("WESENSE_OUTPUT_USERNAME", os.getenv("MQTT_USERNAME")),
+            password=os.getenv("WESENSE_OUTPUT_PASSWORD", os.getenv("MQTT_PASSWORD")),
+            client_id="govaq_publisher",
+        )
+        self.publisher = WeSensePublisher(config=mqtt_config)
+        self.publisher.connect()
+
+        # Ed25519 signing
+        key_config = KeyConfig.from_env()
+        self.key_manager = IngesterKeyManager(config=key_config)
+        self.key_manager.load_or_generate()
+        self.signer = ReadingSigner(self.key_manager)
+        self.logger.info(
+            "Ingester ID: %s (key version %d)",
+            self.key_manager.ingester_id, self.key_manager.key_version,
+        )
+
+        # OrbitDB registry
+        self.trust_store = TrustStore()
+        registry_config = RegistryConfig.from_env()
+        self.registry_client = RegistryClient(
+            config=registry_config,
+            trust_store=self.trust_store,
+        )
+        reg_metadata = {}
+        announce_addr = os.getenv("ANNOUNCE_ADDRESS", "")
+        zenoh_announce = os.getenv("ZENOH_ANNOUNCE_ADDRESS", "")
+        zenoh_port = os.getenv("PORT_ZENOH", "7447")
+        if announce_addr:
+            reg_metadata["zenoh_endpoint"] = f"tcp/{announce_addr}:{zenoh_port}"
+        if zenoh_announce and zenoh_announce != announce_addr:
+            reg_metadata["zenoh_endpoint_lan"] = f"tcp/{zenoh_announce}:{zenoh_port}"
+
+        try:
+            self.registry_client.register_node(
+                ingester_id=self.key_manager.ingester_id,
+                public_key_bytes=self.key_manager.public_key_bytes,
+                key_version=self.key_manager.key_version,
+                **reg_metadata,
+            )
+        except Exception as e:
+            self.logger.warning("OrbitDB registration failed (%s), will retry on next trust sync", e)
+        self.registry_client.start_trust_sync()
+        self.logger.info("OrbitDB registry — trust sync active")
+
+        # Zenoh publisher + queryable (optional)
+        zenoh_config = ZenohConfig.from_env()
+        if zenoh_config.enabled:
+            self.zenoh_publisher = ZenohPublisher(config=zenoh_config, signer=self.signer)
+            self.zenoh_publisher.connect()
+            self.zenoh_queryable = ZenohQueryable(
+                config=zenoh_config,
+                clickhouse_config=ClickHouseConfig.from_env(),
+            )
+            self.zenoh_queryable.connect()
+            self.zenoh_queryable.register("wesense/v2/live/**")
+        else:
+            self.zenoh_publisher = None
+            self.zenoh_queryable = None
+
+        # Load sources and create adapters
+        self.sources = load_sources_config()
+        self.adapters = {}
+        for source_id, source_config in self.sources.items():
+            if not source_config.get("enabled", False):
+                continue
+            adapter_name = source_config.get("adapter", source_id)
+            adapter_class = ADAPTER_CLASSES.get(adapter_name)
+            if not adapter_class:
+                self.logger.error("Unknown adapter '%s' for source '%s'", adapter_name, source_id)
+                continue
+            self.adapters[source_id] = adapter_class(source_id, source_config)
+            self.logger.info("Loaded adapter: %s (%s)", source_id, source_config.get("name", ""))
+
+        # Stats
+        self.stats = {
+            source_id: {
+                "polls": 0,
+                "readings_fetched": 0,
+                "readings_written": 0,
+                "stations_polled": 0,
+                "start_time": datetime.now(),
+            }
+            for source_id in self.adapters
+        }
+
+        # Restore adapter state from cache
+        self._load_adapter_state()
+
+        # Shutdown flag
+        self._running = True
+
+    # ── State persistence ────────────────────────────────────────────
+
+    def _load_adapter_state(self) -> None:
+        """Restore adapter state (last timestamps) from cache."""
+        for source_id, adapter in self.adapters.items():
+            cache_file = f"cache/govaq_{source_id}_state.json"
+            try:
+                if os.path.exists(cache_file):
+                    with open(cache_file) as f:
+                        state = json.load(f)
+                    if hasattr(adapter, "set_last_timestamps"):
+                        adapter.set_last_timestamps(state.get("last_timestamps", {}))
+                    saved_at = state.get("saved_at", 0)
+                    age = int(time.time()) - saved_at
+                    self.logger.info(
+                        "Restored state for %s (age: %ds, %d stations tracked)",
+                        source_id, age, len(state.get("last_timestamps", {})),
+                    )
+            except Exception as e:
+                self.logger.warning("Failed to load state for %s: %s", source_id, e)
+
+    def _save_adapter_state(self) -> None:
+        """Persist adapter state to cache."""
+        os.makedirs("cache", exist_ok=True)
+        for source_id, adapter in self.adapters.items():
+            cache_file = f"cache/govaq_{source_id}_state.json"
+            try:
+                state = {"saved_at": int(time.time())}
+                if hasattr(adapter, "get_last_timestamps"):
+                    state["last_timestamps"] = adapter.get_last_timestamps()
+                with open(cache_file, "w") as f:
+                    json.dump(state, f, indent=2)
+            except Exception as e:
+                self.logger.warning("Failed to save state for %s: %s", source_id, e)
+
+    # ── Core processing pipeline ─────────────────────────────────────
+
+    def process_reading(
+        self,
+        source_id: str,
+        station: dict,
+        reading: dict,
+    ) -> None:
+        """
+        Process a single reading: dedup -> geocode -> sign -> gateway + MQTT + Zenoh.
+        """
+        device_id = f"govaq_{source_id}_{station['station_id']}"
+        reading_type = reading["reading_type"]
+        timestamp = reading["timestamp"]
+        value = reading["value"]
+        unit = reading["unit"]
+
+        # Dedup check
+        if self.dedup.is_duplicate(device_id, reading_type, timestamp):
+            return
+
+        # Geocode
+        geo = self.geocoder.reverse_geocode(station["latitude"], station["longitude"])
+        country_code = geo["geo_country"] if geo else "unknown"
+        subdivision_code = geo["geo_subdivision"] if geo else "unknown"
+
+        # Publish to MQTT
+        mqtt_dict = {
+            "timestamp": timestamp,
+            "device_id": device_id,
+            "name": station["name"],
+            "latitude": station["latitude"],
+            "longitude": station["longitude"],
+            "altitude": None,
+            "country": country_code,
+            "subdivision": subdivision_code,
+            "data_source": "govt-aq",
+            "geo_country": country_code,
+            "geo_subdivision": subdivision_code,
+            "reading_type": reading_type,
+            "value": value,
+            "unit": unit,
+            "board_model": "GOVT_REFERENCE",
+        }
+        self.publisher.publish_reading(mqtt_dict)
+
+        # Publish to Zenoh
+        if self.zenoh_publisher:
+            self.zenoh_publisher.publish_reading({
+                "device_id": device_id,
+                "data_source": DATA_SOURCE,
+                "network_source": source_id,
+                "ingestion_node_id": INGESTION_NODE_ID,
+                "geo_country": country_code,
+                "geo_subdivision": subdivision_code,
+                "timestamp": timestamp,
+                "latitude": station["latitude"],
+                "longitude": station["longitude"],
+                "altitude": None,
+                "transport_type": "HTTP",
+                "reading_type": reading_type,
+                "value": value,
+                "unit": unit,
+                "board_model": "GOVT_REFERENCE",
+                "sensor_model": source_id,
+                "deployment_type": "OUTDOOR",
+                "node_name": station["name"],
+                "location_source": "manual",
+                "calibration_status": "CALIBRATED",
+            })
+
+        # Sign the reading
+        signing_dict = {
+            "device_id": device_id,
+            "data_source": DATA_SOURCE,
+            "timestamp": timestamp,
+            "reading_type": reading_type,
+            "value": value,
+            "latitude": station["latitude"],
+            "longitude": station["longitude"],
+            "transport_type": "HTTP",
+        }
+        signed = self.signer.sign(json.dumps(signing_dict, sort_keys=True).encode())
+
+        # Write to storage gateway
+        if self.gateway_client:
+            self.gateway_client.add({
+                "timestamp": timestamp,
+                "device_id": device_id,
+                "data_source": DATA_SOURCE,
+                "network_source": source_id,
+                "ingestion_node_id": INGESTION_NODE_ID,
+                "reading_type": reading_type,
+                "value": float(value),
+                "unit": unit,
+                "latitude": float(station["latitude"]),
+                "longitude": float(station["longitude"]),
+                "altitude": None,
+                "geo_country": country_code,
+                "geo_subdivision": subdivision_code,
+                "board_model": "GOVT_REFERENCE",
+                "sensor_model": source_id,
+                "calibration_status": "CALIBRATED",
+                "deployment_type": "OUTDOOR",
+                "deployment_type_source": "manual",
+                "transport_type": "HTTP",
+                "location_source": "manual",
+                "node_name": station["name"],
+                "signature": signed.signature.hex(),
+                "ingester_id": self.key_manager.ingester_id,
+                "key_version": self.key_manager.key_version,
+            })
+
+        self.stats[source_id]["readings_written"] += 1
+
+    # ── Polling loop ─────────────────────────────────────────────────
+
+    def poll_all_sources(self) -> None:
+        """Poll all enabled sources for new readings."""
+        for source_id, adapter in self.adapters.items():
+            try:
+                stations = adapter.fetch_stations()
+                self.stats[source_id]["stations_polled"] = len(stations)
+
+                source_readings = 0
+                for station in stations:
+                    readings = adapter.fetch_readings(station)
+                    for reading in readings:
+                        self.process_reading(source_id, station, reading)
+                        source_readings += 1
+
+                self.stats[source_id]["polls"] += 1
+                self.stats[source_id]["readings_fetched"] += source_readings
+
+                if source_readings > 0:
+                    self.logger.info(
+                        "Poll complete: %s — %d new readings from %d stations",
+                        source_id, source_readings, len(stations),
+                    )
+
+            except Exception as e:
+                self.logger.error("Error polling source %s: %s", source_id, e, exc_info=True)
+
+        # Save state after each poll cycle
+        self._save_adapter_state()
+
+    # ── Stats ────────────────────────────────────────────────────────
+
+    def print_stats(self) -> None:
+        """Print statistics for all sources."""
+        print("\n" + "=" * 70)
+        for source_id, data in self.stats.items():
+            elapsed = (datetime.now() - data["start_time"]).total_seconds()
+            rate = data["readings_written"] / (elapsed / 3600) if elapsed > 0 else 0
+            print(
+                f"[{source_id:8}] Polls: {data['polls']:4} | "
+                f"Stations: {data['stations_polled']:3} | "
+                f"Fetched: {data['readings_fetched']:6} | "
+                f"Written: {data['readings_written']:6} | "
+                f"Rate: {rate:.0f}/hr"
+            )
+
+        dedup_stats = self.dedup.get_stats()
+        storage_stats = (
+            self.gateway_client.get_stats()
+            if self.gateway_client
+            else {"total_written": 0}
+        )
+        total = dedup_stats["duplicates_blocked"] + dedup_stats["unique_processed"]
+        block_rate = dedup_stats["duplicates_blocked"] / total * 100 if total > 0 else 0
+        print(
+            f"\nDEDUP: Total: {total} | Dups: {dedup_stats['duplicates_blocked']} "
+            f"({block_rate:.1f}%) | Unique: {dedup_stats['unique_processed']} | "
+            f"Writes: {storage_stats['total_written']} | Cache: {dedup_stats['cache_size']}"
+        )
+        print("=" * 70)
+
+    # ── Lifecycle ────────────────────────────────────────────────────
+
+    def shutdown(self, signum=None, frame=None) -> None:
+        """Graceful shutdown: save state, flush buffers, disconnect."""
+        if not self._running:
+            return
+        self._running = False
+
+        print("\n" + "=" * 60)
+        print("Shutting down gracefully...")
+
+        self._save_adapter_state()
+
+        if self.gateway_client:
+            print("  Flushing gateway buffer...")
+            self.gateway_client.close()
+
+        if hasattr(self, "zenoh_queryable") and self.zenoh_queryable:
+            self.zenoh_queryable.close()
+        if hasattr(self, "zenoh_publisher") and self.zenoh_publisher:
+            self.zenoh_publisher.close()
+        if hasattr(self, "registry_client"):
+            self.registry_client.close()
+
+        self.publisher.close()
+        print("Shutdown complete.")
+        print("=" * 60)
+
+    def run(self) -> None:
+        """Main entry point: poll sources on interval."""
+        signal.signal(signal.SIGINT, self.shutdown)
+        signal.signal(signal.SIGTERM, self.shutdown)
+        atexit.register(self.shutdown)
+
+        print("=" * 60)
+        print(f"Government Air Quality Ingester (source={DATA_SOURCE})")
+        print(f"Poll interval: {POLL_INTERVAL}s")
+        print(f"Sources: {', '.join(self.adapters.keys())}")
+        print("=" * 60)
+
+        # Initial poll immediately
+        self.poll_all_sources()
+
+        last_poll = time.time()
+        last_stats = time.time()
+
+        while self._running:
+            now = time.time()
+
+            if now - last_poll >= POLL_INTERVAL:
+                self.poll_all_sources()
+                last_poll = now
+
+            if now - last_stats >= STATS_INTERVAL:
+                self.print_stats()
+                last_stats = now
+
+            time.sleep(1)
+
+
+def main():
+    ingester = GovAQIngester()
+    ingester.run()
+
+
+if __name__ == "__main__":
+    main()
