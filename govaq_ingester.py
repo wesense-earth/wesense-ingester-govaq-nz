@@ -3,7 +3,7 @@
 WeSense Ingester — Government Air Quality (GovAQ)
 
 Polls government air quality monitoring APIs and writes reference-grade
-readings to the WeSense pipeline (gateway + MQTT + Zenoh).
+readings to the WeSense pipeline (gateway + MQTT).
 
 Structured for multiple source adapters (ECan, DEFRA, AirNow, etc.)
 loaded from config/sources.json — similar to the meshtastic ingester's
@@ -11,6 +11,10 @@ multi-region pattern.
 
 Starts with Environment Canterbury (ECan) — 18 stations, 10-minute
 resolution, no auth required.
+
+This ingester does NOT participate in the Zenoh P2P network directly.
+Readings reach Zenoh via the storage gateway, which handles P2P
+distribution for all ingesters.
 """
 
 import atexit
@@ -28,18 +32,11 @@ from wesense_ingester import (
     ReverseGeocoder,
     setup_logging,
 )
-from wesense_ingester.clickhouse.writer import ClickHouseConfig
 from wesense_ingester.gateway.client import GatewayClient
 from wesense_ingester.gateway.config import GatewayConfig
 from wesense_ingester.mqtt.publisher import MQTTPublisherConfig, WeSensePublisher
 from wesense_ingester.signing.keys import IngesterKeyManager, KeyConfig
 from wesense_ingester.signing.signer import ReadingSigner
-from wesense_ingester.zenoh.config import ZenohConfig
-from wesense_ingester.zenoh.publisher import ZenohPublisher
-from wesense_ingester.zenoh.queryable import ZenohQueryable
-from wesense_ingester.registry.config import RegistryConfig
-from wesense_ingester.registry.client import RegistryClient
-from wesense_ingester.signing.trust import TrustStore
 
 from adapters.ecan import ECanAdapter
 
@@ -113,49 +110,6 @@ class GovAQIngester:
             "Ingester ID: %s (key version %d)",
             self.key_manager.ingester_id, self.key_manager.key_version,
         )
-
-        # OrbitDB registry
-        self.trust_store = TrustStore()
-        registry_config = RegistryConfig.from_env()
-        self.registry_client = RegistryClient(
-            config=registry_config,
-            trust_store=self.trust_store,
-        )
-        reg_metadata = {}
-        announce_addr = os.getenv("ANNOUNCE_ADDRESS", "")
-        zenoh_announce = os.getenv("ZENOH_ANNOUNCE_ADDRESS", "")
-        zenoh_port = os.getenv("PORT_ZENOH", "7447")
-        if announce_addr:
-            reg_metadata["zenoh_endpoint"] = f"tcp/{announce_addr}:{zenoh_port}"
-        if zenoh_announce and zenoh_announce != announce_addr:
-            reg_metadata["zenoh_endpoint_lan"] = f"tcp/{zenoh_announce}:{zenoh_port}"
-
-        try:
-            self.registry_client.register_node(
-                ingester_id=self.key_manager.ingester_id,
-                public_key_bytes=self.key_manager.public_key_bytes,
-                key_version=self.key_manager.key_version,
-                **reg_metadata,
-            )
-        except Exception as e:
-            self.logger.warning("OrbitDB registration failed (%s), will retry on next trust sync", e)
-        self.registry_client.start_trust_sync()
-        self.logger.info("OrbitDB registry — trust sync active")
-
-        # Zenoh publisher + queryable (optional)
-        zenoh_config = ZenohConfig.from_env()
-        if zenoh_config.enabled:
-            self.zenoh_publisher = ZenohPublisher(config=zenoh_config, signer=self.signer)
-            self.zenoh_publisher.connect()
-            self.zenoh_queryable = ZenohQueryable(
-                config=zenoh_config,
-                clickhouse_config=ClickHouseConfig.from_env(),
-            )
-            self.zenoh_queryable.connect()
-            self.zenoh_queryable.register("wesense/v2/live/**")
-        else:
-            self.zenoh_publisher = None
-            self.zenoh_queryable = None
 
         # Load sources and create adapters
         self.sources = load_sources_config()
@@ -233,7 +187,7 @@ class GovAQIngester:
         reading: dict,
     ) -> None:
         """
-        Process a single reading: dedup -> geocode -> sign -> gateway + MQTT + Zenoh.
+        Process a single reading: dedup -> geocode -> sign -> gateway + MQTT.
         """
         device_id = f"govaq_{source_id}_{station['station_id']}"
         reading_type = reading["reading_type"]
@@ -269,31 +223,6 @@ class GovAQIngester:
             "board_model": "GOVT_REFERENCE",
         }
         self.publisher.publish_reading(mqtt_dict)
-
-        # Publish to Zenoh
-        if self.zenoh_publisher:
-            self.zenoh_publisher.publish_reading({
-                "device_id": device_id,
-                "data_source": DATA_SOURCE,
-                "network_source": source_id,
-                "ingestion_node_id": INGESTION_NODE_ID,
-                "geo_country": country_code,
-                "geo_subdivision": subdivision_code,
-                "timestamp": timestamp,
-                "latitude": station["latitude"],
-                "longitude": station["longitude"],
-                "altitude": None,
-                "transport_type": "HTTP",
-                "reading_type": reading_type,
-                "value": value,
-                "unit": unit,
-                "board_model": "GOVT_REFERENCE",
-                "sensor_model": source_id,
-                "deployment_type": "OUTDOOR",
-                "node_name": station["name"],
-                "location_source": "manual",
-                "calibration_status": "CALIBRATED",
-            })
 
         # Sign the reading
         signing_dict = {
@@ -417,13 +346,6 @@ class GovAQIngester:
         if self.gateway_client:
             print("  Flushing gateway buffer...")
             self.gateway_client.close()
-
-        if hasattr(self, "zenoh_queryable") and self.zenoh_queryable:
-            self.zenoh_queryable.close()
-        if hasattr(self, "zenoh_publisher") and self.zenoh_publisher:
-            self.zenoh_publisher.close()
-        if hasattr(self, "registry_client"):
-            self.registry_client.close()
 
         self.publisher.close()
         print("Shutdown complete.")

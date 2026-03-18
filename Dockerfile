@@ -16,9 +16,12 @@ COPY wesense-ingester-core/ /tmp/wesense-ingester-core/
 COPY wesense-ingester-govaq/requirements-docker.txt .
 
 # Install gcc, build all pip packages, then remove gcc in one layer
+# Install core without [p2p] extra — this ingester does not participate
+# in the Zenoh P2P network directly. Readings reach P2P consumers via
+# the storage gateway which handles Zenoh distribution.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends gcc && \
-    pip install --no-cache-dir "/tmp/wesense-ingester-core[p2p]" && \
+    pip install --no-cache-dir /tmp/wesense-ingester-core && \
     pip install --no-cache-dir -r requirements-docker.txt && \
     apt-get purge -y --auto-remove gcc && \
     rm -rf /var/lib/apt/lists/* /tmp/wesense-ingester-core
