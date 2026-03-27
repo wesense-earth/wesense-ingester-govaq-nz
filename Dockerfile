@@ -1,5 +1,5 @@
 # WeSense Ingester - Government Air Quality (GovAQ)
-# Build: docker build -t wesense-ingester-govaq .
+# Build: docker build -t wesense-ingester-govaq-nz .
 #
 # Polls government air quality APIs for reference-grade readings.
 # Configure sources in config/sources.json.
@@ -13,7 +13,7 @@ WORKDIR /app
 
 # Copy dependency files first for better layer caching
 COPY wesense-ingester-core/ /tmp/wesense-ingester-core/
-COPY wesense-ingester-govaq/requirements-docker.txt .
+COPY wesense-ingester-govaq-nz/requirements-docker.txt .
 
 # Install gcc, build all pip packages, then remove gcc in one layer
 # Install core without [p2p] extra — this ingester does not participate
@@ -27,11 +27,11 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/* /tmp/wesense-ingester-core
 
 # Copy application code and default config
-COPY wesense-ingester-govaq/govaq_ingester.py .
-COPY wesense-ingester-govaq/adapters/ ./adapters/
-COPY wesense-ingester-govaq/config/ ./config/
+COPY wesense-ingester-govaq-nz/govaq_ingester.py .
+COPY wesense-ingester-govaq-nz/adapters/ ./adapters/
+COPY wesense-ingester-govaq-nz/config/ ./config/
 
-COPY wesense-ingester-govaq/entrypoint.sh /app/entrypoint.sh
+COPY wesense-ingester-govaq-nz/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
 # Create directories for cache, logs, and config

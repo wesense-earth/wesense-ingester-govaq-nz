@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 """
-WeSense Ingester — Government Air Quality (GovAQ)
+WeSense Ingester — Government Air Quality, New Zealand (GovAQ-NZ)
 
-Polls government air quality monitoring APIs and writes reference-grade
+Polls NZ regional council air quality APIs and writes reference-grade
 readings to the WeSense pipeline (gateway + MQTT).
 
-Structured for multiple source adapters (ECan, DEFRA, AirNow, etc.)
-loaded from config/sources.json — similar to the meshtastic ingester's
-multi-region pattern.
-
-Starts with Environment Canterbury (ECan) — 18 stations, 10-minute
-resolution, no auth required.
+Sources loaded from config/sources.json:
+  - ECan (Environment Canterbury) — custom REST API, 10-minute data
+  - 7 regional councils via Hilltop API — Tasman, Nelson, Marlborough,
+    Hawke's Bay, Gisborne, Horizons, West Coast
 
 This ingester does NOT participate in the Zenoh P2P network directly.
 Readings reach Zenoh via the storage gateway, which handles P2P
@@ -45,7 +43,7 @@ from adapters.hilltop import HilltopAdapter
 INGESTION_NODE_ID = os.getenv("INGESTION_NODE_ID", socket.gethostname())
 POLL_INTERVAL = int(os.getenv("GOVAQ_POLL_INTERVAL", "600"))  # 10 minutes
 STATS_INTERVAL = int(os.getenv("STATS_INTERVAL", "60"))
-DATA_SOURCE = "GOVT_AQ"
+DATA_SOURCE = "GOVT_AQ_NZ"
 
 # ── Adapter registry ─────────────────────────────────────────────────
 ADAPTER_CLASSES = {
@@ -78,7 +76,7 @@ class GovAQIngester:
 
     def __init__(self):
         # Logging
-        self.logger = setup_logging("govaq_ingester")
+        self.logger = setup_logging("govaq_nz_ingester")
 
         # Core components
         self.dedup = DeduplicationCache()
@@ -98,7 +96,7 @@ class GovAQIngester:
             port=int(os.getenv("WESENSE_OUTPUT_PORT", os.getenv("MQTT_PORT", "1883"))),
             username=os.getenv("WESENSE_OUTPUT_USERNAME", os.getenv("MQTT_USERNAME")),
             password=os.getenv("WESENSE_OUTPUT_PASSWORD", os.getenv("MQTT_PASSWORD")),
-            client_id="govaq_publisher",
+            client_id="govaq_nz_publisher",
         )
         self.publisher = WeSensePublisher(config=mqtt_config)
         self.publisher.connect()
@@ -150,7 +148,7 @@ class GovAQIngester:
     def _load_adapter_state(self) -> None:
         """Restore adapter state (last timestamps) from cache."""
         for source_id, adapter in self.adapters.items():
-            cache_file = f"cache/govaq_{source_id}_state.json"
+            cache_file = f"cache/govaq_nz_{source_id}_state.json"
             try:
                 if os.path.exists(cache_file):
                     with open(cache_file) as f:
@@ -170,7 +168,7 @@ class GovAQIngester:
         """Persist adapter state to cache."""
         os.makedirs("cache", exist_ok=True)
         for source_id, adapter in self.adapters.items():
-            cache_file = f"cache/govaq_{source_id}_state.json"
+            cache_file = f"cache/govaq_nz_{source_id}_state.json"
             try:
                 state = {"saved_at": int(time.time())}
                 if hasattr(adapter, "get_last_timestamps"):
@@ -191,7 +189,7 @@ class GovAQIngester:
         """
         Process a single reading: dedup -> geocode -> sign -> gateway + MQTT.
         """
-        device_id = f"govaq_{source_id}_{station['station_id']}"
+        device_id = f"govaq_nz_{source_id}_{station['station_id']}"
         reading_type = reading["reading_type"]
         timestamp = reading["timestamp"]
         value = reading["value"]
