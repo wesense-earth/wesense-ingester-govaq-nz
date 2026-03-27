@@ -39,6 +39,7 @@ from wesense_ingester.signing.keys import IngesterKeyManager, KeyConfig
 from wesense_ingester.signing.signer import ReadingSigner
 
 from adapters.ecan import ECanAdapter
+from adapters.hilltop import HilltopAdapter
 
 # ── Configuration ────────────────────────────────────────────────────
 INGESTION_NODE_ID = os.getenv("INGESTION_NODE_ID", socket.gethostname())
@@ -49,6 +50,7 @@ DATA_SOURCE = "GOVT_AQ"
 # ── Adapter registry ─────────────────────────────────────────────────
 ADAPTER_CLASSES = {
     "ecan": ECanAdapter,
+    "hilltop": HilltopAdapter,
 }
 
 

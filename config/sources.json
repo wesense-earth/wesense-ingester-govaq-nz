@@ -5,5 +5,61 @@
     "adapter": "ecan",
     "stations_url": "http://data.ecan.govt.nz/data/23/Air/Air%20quality%20sites%20monitored/JSON",
     "data_url_template": "http://data.ecan.govt.nz/data/29/Air/Air%20quality%20data%20for%20a%20monitored%20site%20(10%20Minute)/JSON?SiteID={site_id}&StartDate={date}&EndDate={date}"
+  },
+  "tasman": {
+    "enabled": true,
+    "name": "Tasman District Council",
+    "adapter": "hilltop",
+    "hilltop_url": "http://envdata.tasman.govt.nz/data.hts",
+    "site_patterns": ["^AQ "]
+  },
+  "nelson": {
+    "enabled": true,
+    "name": "Nelson City Council",
+    "adapter": "hilltop",
+    "hilltop_url": "http://envdata.nelson.govt.nz/data.hts",
+    "site_patterns": ["^AQ "]
+  },
+  "marlborough": {
+    "enabled": true,
+    "name": "Marlborough District Council",
+    "adapter": "hilltop",
+    "hilltop_url": "http://hydro.marlborough.govt.nz/data.hts",
+    "site_patterns": ["Blenheim Bowling Club"]
+  },
+  "hawkesbay": {
+    "enabled": true,
+    "name": "Hawke's Bay Regional Council",
+    "adapter": "hilltop",
+    "hilltop_url": "https://data.hbrc.govt.nz/envirodata/emar.hts",
+    "site_patterns": ["\\bAQ$", "\\bAir$", "\\bFidas$", "\\bEBAM$"]
+  },
+  "gisborne": {
+    "enabled": true,
+    "name": "Gisborne District Council",
+    "adapter": "hilltop",
+    "hilltop_url": "http://hilltop.gdc.govt.nz/data.hts",
+    "site_patterns": ["Air Quality", "Purple Air"]
+  },
+  "horizons": {
+    "enabled": true,
+    "name": "Horizons Regional Council",
+    "adapter": "hilltop",
+    "hilltop_url": "https://hilltopserver.horizons.govt.nz/data.hts",
+    "site_patterns": ["^Air Quality at"]
+  },
+  "westcoast": {
+    "enabled": true,
+    "name": "West Coast Regional Council",
+    "adapter": "hilltop",
+    "hilltop_url": "http://hilltop.wcrc.govt.nz/data.hts",
+    "site_patterns": ["Reefton.*AQ", "Reefton Air"]
+  },
+  "northland": {
+    "enabled": true,
+    "name": "Northland Regional Council",
+    "adapter": "hilltop",
+    "hilltop_url": "http://hilltop.nrc.govt.nz/data.hts",
+    "site_patterns": ["Air Shed"]
   }
 }
