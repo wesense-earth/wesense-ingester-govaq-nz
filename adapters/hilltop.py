@@ -19,6 +19,7 @@ import re
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
+from urllib.parse import quote, urlencode
 
 import requests
 
@@ -106,12 +107,22 @@ class HilltopAdapter(GovAQAdapter):
     def _hilltop_get(self, params: dict) -> ET.Element | None:
         """Make a Hilltop API request and return parsed XML root."""
         params = {"Service": "Hilltop", **params}
+        # Hilltop servers require %20 for spaces, not + (which requests uses).
+        # Build the query string manually with quote_via=quote.
+        qs = urlencode(params, quote_via=quote)
+        url = f"{self._base_url}?{qs}"
         try:
             resp = self._session.get(
-                self._base_url, params=params, timeout=30, allow_redirects=True,
+                url, timeout=30, allow_redirects=True,
             )
             resp.raise_for_status()
-            return ET.fromstring(resp.content)
+            root = ET.fromstring(resp.content)
+            # Check for Hilltop error responses
+            err = root.find("Error")
+            if err is not None:
+                logger.debug("[%s] Hilltop error: %s (params=%s)", self.source_id, err.text, params)
+                return None
+            return root
         except requests.RequestException as e:
             logger.warning("[%s] HTTP error: %s (params=%s)", self.source_id, e, params)
             return None
