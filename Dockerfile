@@ -26,9 +26,10 @@ RUN apt-get update && \
     apt-get purge -y --auto-remove gcc && \
     rm -rf /var/lib/apt/lists/* /tmp/wesense-ingester-core
 
-# Copy application code
+# Copy application code and default config
 COPY wesense-ingester-govaq/govaq_ingester.py .
 COPY wesense-ingester-govaq/adapters/ ./adapters/
+COPY wesense-ingester-govaq/config/ ./config/
 
 COPY wesense-ingester-govaq/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
