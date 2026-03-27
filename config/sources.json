@@ -56,10 +56,11 @@
     "site_patterns": ["Reefton.*AQ", "Reefton Air"]
   },
   "northland": {
-    "enabled": true,
+    "enabled": false,
     "name": "Northland Regional Council",
     "adapter": "hilltop",
     "hilltop_url": "http://hilltop.nrc.govt.nz/data.hts",
-    "site_patterns": ["Air Shed"]
+    "site_patterns": ["Air Shed"],
+    "_note": "Disabled — last air quality data from 2016, stations appear inactive"
   }
 }

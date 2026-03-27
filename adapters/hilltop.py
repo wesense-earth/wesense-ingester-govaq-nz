@@ -40,7 +40,7 @@ NZ_TZ = timezone(timedelta(hours=12))
 # point-in-time readings.
 
 SKIP_PATTERNS = re.compile(
-    r"(Average|Monthly|Yearly|Annual|LAWA|Missing Record|\bVM\b)",
+    r"(Average|Monthly|Yearly|Annual|LAWA|Missing Record|\bVM\b|Exceedance|Gaps)",
     re.IGNORECASE,
 )
 
@@ -49,8 +49,12 @@ SKIP_PATTERNS = re.compile(
 MEASUREMENT_MAP = [
     # PM2.5 — match before PM10 to avoid "PM2.5" matching a "PM" rule
     (re.compile(r"PM\s*2\.?5", re.IGNORECASE), "pm2_5", "ug/m3"),
+    # Particulate Matter 2.5 (Gisborne naming: "Particulate Matter 2.5 - 1 min interval")
+    (re.compile(r"Particulate Matter 2\.5", re.IGNORECASE), "pm2_5", "ug/m3"),
     # PM10
     (re.compile(r"PM\s*10", re.IGNORECASE), "pm10", "ug/m3"),
+    # Particulate Matter 10 (Gisborne naming: "Particulate Matter 10 - 1 min interval")
+    (re.compile(r"Particulate Matter 10", re.IGNORECASE), "pm10", "ug/m3"),
     # Particulate Matter (generic, usually PM10)
     (re.compile(r"^Particulate Matter$", re.IGNORECASE), "pm10", "ug/m3"),
     # Nitrogen dioxide — prefer ug/m3 variants
@@ -245,13 +249,15 @@ class HilltopAdapter(GovAQAdapter):
         if not measurements:
             return []
 
-        # Query the last 2 hours of data
+        # On first poll (no prior state), look back 24h to catch infrequent stations.
+        # Subsequent polls only need the last 2 hours.
         nz_now = datetime.now(NZ_TZ)
-        from_time = nz_now - timedelta(hours=2)
+        last_ts = self._last_timestamps.get(site_name, 0)
+        lookback_hours = 24 if last_ts == 0 else 2
+        from_time = nz_now - timedelta(hours=lookback_hours)
         from_str = from_time.strftime("%Y-%m-%dT%H:%M:%S")
         to_str = nz_now.strftime("%Y-%m-%dT%H:%M:%S")
 
-        last_ts = self._last_timestamps.get(site_name, 0)
         readings = []
 
         for meas in measurements:
