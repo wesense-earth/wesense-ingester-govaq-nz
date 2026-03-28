@@ -40,7 +40,12 @@ NZ_TZ = timezone(timedelta(hours=12))
 # point-in-time readings.
 
 SKIP_PATTERNS = re.compile(
-    r"(Average|Monthly|Yearly|Annual|LAWA|Missing Record|\bVM\b|Exceedance|Gaps)",
+    r"(Average|Monthly|Yearly|Annual|LAWA|Missing Record|\bVM\b|Exceedance|Gaps"
+    r"|Moving Total|Cumulative|Hourly|Runoff|Modelling|SCADA|cosine|sine"
+    r"|closed gaps|Inspection|Daily Precipitation|Precipitation \(Daily\)"
+    r"|Enclosure Temp|Board Temp|Internal Temp|Partisol.*Temp"
+    r"|Vacuum|Flow Pressure|Flow Volume|Flow Temp|Campbell|Software Version"
+    r"|Voltage|NEMS|Dry Days|Dew Point)",
     re.IGNORECASE,
 )
 
@@ -74,6 +79,27 @@ MEASUREMENT_MAP = [
     (re.compile(r"^Carbon Monoxide$", re.IGNORECASE), "co", "mg/m3"),
     # Sulphur dioxide
     (re.compile(r"Sulphur Dioxide", re.IGNORECASE), "so2", "ug/m3"),
+    # ── Weather measurements ─────────────────────────────────────────
+    # Wind speed (match before "Wind" to avoid partial matches)
+    (re.compile(r"^Wind Speed$", re.IGNORECASE), "wind_speed", "m/s"),
+    (re.compile(r"^Maximum Wind Speed$", re.IGNORECASE), "wind_gust", "m/s"),
+    # Wind direction
+    (re.compile(r"^Wind Direction$", re.IGNORECASE), "wind_direction", "degrees"),
+    (re.compile(r"^Maximum Wind Direction$", re.IGNORECASE), "wind_gust_direction", "degrees"),
+    # Air temperature — various naming conventions
+    (re.compile(r"^Air Temperature \(continuous\)$", re.IGNORECASE), "temperature", "C"),
+    (re.compile(r"^Air Temperature \(1\.5m\)$", re.IGNORECASE), "temperature", "C"),
+    (re.compile(r"^Air Temperature \(5m\)$", re.IGNORECASE), "temperature_5m", "C"),
+    (re.compile(r"^Air Temperature$", re.IGNORECASE), "temperature", "C"),
+    # Relative humidity
+    (re.compile(r"^Relative [Hh]umidity$", re.IGNORECASE), "humidity", "%"),
+    (re.compile(r"^Relative humidity \(%\)$", re.IGNORECASE), "humidity", "%"),
+    # Barometric pressure
+    (re.compile(r"^Barometric Pressure$", re.IGNORECASE), "pressure", "hPa"),
+    # Rainfall — raw tipping bucket, not moving totals or aggregates
+    (re.compile(r"^Rainfall$", re.IGNORECASE), "rainfall", "mm"),
+    (re.compile(r"^Rainfall Total \(6 min\)$", re.IGNORECASE), "rainfall", "mm"),
+    (re.compile(r"^Rainfall Total \(15 Min\)$", re.IGNORECASE), "rainfall", "mm"),
 ]
 
 # Site name patterns that indicate air quality monitoring
