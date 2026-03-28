@@ -43,7 +43,8 @@ from adapters.hilltop import HilltopAdapter
 INGESTION_NODE_ID = os.getenv("INGESTION_NODE_ID", socket.gethostname())
 POLL_INTERVAL = int(os.getenv("GOVAQ_POLL_INTERVAL", "600"))  # 10 minutes
 STATS_INTERVAL = int(os.getenv("STATS_INTERVAL", "60"))
-DATA_SOURCE = "GOVT_AQ_NZ"
+# Calibrated sources — only set calibration_status for sources we know are calibrated
+CALIBRATED_SOURCES = {"ecan"}
 
 # ── Adapter registry ─────────────────────────────────────────────────
 ADAPTER_CLASSES = {
@@ -195,14 +196,17 @@ class GovAQIngester:
         value = reading["value"]
         unit = reading["unit"]
 
+        # Friendly name from sources.json config
+        source_name = self.sources.get(source_id, {}).get("name", source_id)
+
         # Dedup check
         if self.dedup.is_duplicate(device_id, reading_type, timestamp):
             return
 
         # Geocode
         geo = self.geocoder.reverse_geocode(station["latitude"], station["longitude"])
-        country_code = geo["geo_country"] if geo else "unknown"
-        subdivision_code = geo["geo_subdivision"] if geo else "unknown"
+        country_code = geo["geo_country"] if geo else ""
+        subdivision_code = geo["geo_subdivision"] if geo else ""
 
         # Publish to MQTT
         mqtt_dict = {
@@ -214,26 +218,26 @@ class GovAQIngester:
             "altitude": None,
             "country": country_code,
             "subdivision": subdivision_code,
-            "data_source": "govt-aq",
+            "data_source": source_id,
             "geo_country": country_code,
             "geo_subdivision": subdivision_code,
             "reading_type": reading_type,
             "value": value,
             "unit": unit,
-            "board_model": "GOVT_REFERENCE",
+            "board_model": "",
         }
         self.publisher.publish_reading(mqtt_dict)
 
         # Sign the reading
         signing_dict = {
             "device_id": device_id,
-            "data_source": DATA_SOURCE,
+            "data_source": source_id,
             "timestamp": timestamp,
             "reading_type": reading_type,
             "value": value,
             "latitude": station["latitude"],
             "longitude": station["longitude"],
-            "transport_type": "HTTP",
+            "transport_type": "",
         }
         signed = self.signer.sign(json.dumps(signing_dict, sort_keys=True).encode())
 
@@ -242,8 +246,9 @@ class GovAQIngester:
             self.gateway_client.add({
                 "timestamp": timestamp,
                 "device_id": device_id,
-                "data_source": DATA_SOURCE,
-                "network_source": source_id,
+                "data_source": source_id,
+                "data_source_name": source_name,
+                "network_source": "api",
                 "ingestion_node_id": INGESTION_NODE_ID,
                 "reading_type": reading_type,
                 "value": float(value),
@@ -253,12 +258,12 @@ class GovAQIngester:
                 "altitude": None,
                 "geo_country": country_code,
                 "geo_subdivision": subdivision_code,
-                "board_model": "GOVT_REFERENCE",
-                "sensor_model": source_id,
-                "calibration_status": "CALIBRATED",
+                "board_model": "",
+                "sensor_model": "",
+                "calibration_status": "calibrated" if source_id in CALIBRATED_SOURCES else "",
                 "deployment_type": "OUTDOOR",
                 "deployment_type_source": "manual",
-                "transport_type": "HTTP",
+                "transport_type": "",
                 "location_source": "manual",
                 "node_name": station["name"],
                 "signature": signed.signature.hex(),
@@ -358,7 +363,7 @@ class GovAQIngester:
         atexit.register(self.shutdown)
 
         print("=" * 60)
-        print(f"Government Air Quality Ingester (source={DATA_SOURCE})")
+        print("Government Air Quality Ingester — New Zealand")
         print(f"Poll interval: {POLL_INTERVAL}s")
         print(f"Sources: {', '.join(self.adapters.keys())}")
         print("=" * 60)
