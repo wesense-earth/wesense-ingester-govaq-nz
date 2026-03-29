@@ -1,11 +1,5 @@
 # Adapter-specific dependencies for wesense-ingester-govaq
-# Core dependencies (clickhouse-connect, paho-mqtt, reverse_geocoder) are
-# provided by wesense-ingester-core installed separately.
+# Core dependencies (clickhouse-connect, paho-mqtt, reverse_geocoder,
+# cryptography, protobuf) are provided by wesense-ingester-core.
 
 requests>=2.31.0
-
-# Signing dependencies — needed by wesense-ingester-core's signing module.
-# Normally comes via the [p2p] extra but we don't install that since
-# this ingester doesn't need eclipse-zenoh.
-cryptography>=42.0.0
-protobuf>=5.26.0
