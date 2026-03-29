@@ -27,7 +27,7 @@
     "hilltop_url": "http://hydro.marlborough.govt.nz/data.hts",
     "site_patterns": ["Blenheim Bowling Club"]
   },
-  "hawkes_bay": {
+  "hawkesbay": {
     "enabled": true,
     "name": "Hawke's Bay Regional Council",
     "adapter": "hilltop",
