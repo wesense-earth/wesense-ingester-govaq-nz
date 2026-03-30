@@ -225,6 +225,8 @@ class GovAQIngester:
             "value": value,
             "unit": unit,
             "board_model": "",
+            "deployment_type": "OUTDOOR",
+            "deployment_type_source": "manual",
         }
         self.publisher.publish_reading(mqtt_dict)
 
