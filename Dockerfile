@@ -26,6 +26,9 @@ RUN apt-get update && \
     apt-get purge -y --auto-remove gcc && \
     rm -rf /var/lib/apt/lists/* /tmp/wesense-ingester-core
 
+# Bust cache for application code on every CI build
+ARG CACHE_BUST=1
+
 # Copy application code and default config
 COPY wesense-ingester-govaq-nz/govaq_ingester.py .
 COPY wesense-ingester-govaq-nz/adapters/ ./adapters/
