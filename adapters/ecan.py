@@ -12,6 +12,7 @@ import logging
 import re
 import time
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -69,8 +70,8 @@ XML_DECODE = {
     "_x002C_": ",",
 }
 
-# NZ timezone offset (handles both NZST +12 and NZDT +13)
-NZ_TZ = timezone(timedelta(hours=12))
+# NZ timezone with automatic DST handling (NZST +12 / NZDT +13)
+NZ_TZ = ZoneInfo("Pacific/Auckland")
 
 # Max age before a station is considered inactive
 STATION_INACTIVE_DAYS = 30

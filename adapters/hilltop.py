@@ -20,6 +20,7 @@ import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
 from urllib.parse import quote, urlencode
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -27,8 +28,8 @@ from adapters.base import GovAQAdapter
 
 logger = logging.getLogger(__name__)
 
-# NZ timezone (NZST +12; Hilltop timestamps are local time without tz info)
-NZ_TZ = timezone(timedelta(hours=12))
+# NZ timezone with automatic DST handling (NZST +12 / NZDT +13)
+NZ_TZ = ZoneInfo("Pacific/Auckland")
 
 # ── Measurement name matching ────────────────────────────────────────
 # Hilltop measurement names vary wildly across councils. We match the
