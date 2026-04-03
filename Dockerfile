@@ -23,6 +23,7 @@ COPY wesense-ingester-govaq-nz/requirements-docker.txt .
 # the storage gateway which handles Zenoh distribution.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends gcc && \
+    pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir /tmp/wesense-ingester-core && \
     pip install --no-cache-dir -r requirements-docker.txt && \
     apt-get purge -y --auto-remove gcc && \
