@@ -15,15 +15,13 @@ Readings reach Zenoh via the storage gateway, which handles P2P
 distribution for all ingesters.
 """
 
-import atexit
 import json
 import os
-import signal
 import sys
 import time
 from datetime import datetime
 
-from wesense_ingester import ReadingPipeline, setup_logging
+from wesense_ingester import ReadingPipeline, Shutdown, setup_logging
 from wesense_ingester.mqtt.publisher import MQTTPublisherConfig
 
 from adapters.ecan import ECanAdapter
@@ -106,9 +104,6 @@ class GovAQIngester:
 
         # Restore adapter state from cache
         self._load_adapter_state()
-
-        # Shutdown flag
-        self._running = True
 
     # ── State persistence ────────────────────────────────────────────
 
@@ -243,12 +238,8 @@ class GovAQIngester:
 
     # ── Lifecycle ────────────────────────────────────────────────────
 
-    def shutdown(self, signum=None, frame=None) -> None:
+    def shutdown(self) -> None:
         """Graceful shutdown: save state, flush buffers, disconnect."""
-        if not self._running:
-            return
-        self._running = False
-
         print("\n" + "=" * 60)
         print("Shutting down gracefully...")
 
@@ -261,9 +252,7 @@ class GovAQIngester:
 
     def run(self) -> None:
         """Main entry point: poll sources on interval."""
-        signal.signal(signal.SIGINT, self.shutdown)
-        signal.signal(signal.SIGTERM, self.shutdown)
-        atexit.register(self.shutdown)
+        shutdown = Shutdown(name="govaq_nz")
 
         print("=" * 60)
         print("Government Air Quality Ingester — New Zealand")
@@ -271,24 +260,38 @@ class GovAQIngester:
         print(f"Sources: {', '.join(self.adapters.keys())}")
         print("=" * 60)
 
+        self.logger.info("Starting (poll interval: %ds)", POLL_INTERVAL)
+
         # Initial poll immediately
-        self.poll_all_sources()
+        try:
+            self.poll_all_sources()
+        except Exception as e:
+            self.logger.error("Poll cycle failed: %s", e, exc_info=True)
 
         last_poll = time.time()
         last_stats = time.time()
 
-        while self._running:
+        # Tick at the shorter of the two intervals so stats remain responsive.
+        tick = min(STATS_INTERVAL, POLL_INTERVAL)
+
+        while not shutdown.requested:
+            if shutdown.sleep(tick):
+                break
+
             now = time.time()
 
             if now - last_poll >= POLL_INTERVAL:
-                self.poll_all_sources()
+                try:
+                    self.poll_all_sources()
+                except Exception as e:
+                    self.logger.error("Poll cycle failed: %s", e, exc_info=True)
                 last_poll = now
 
             if now - last_stats >= STATS_INTERVAL:
                 self.print_stats()
                 last_stats = now
 
-            time.sleep(1)
+        self.shutdown()
 
 
 def main():
