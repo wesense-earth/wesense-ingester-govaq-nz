@@ -1,3 +1,3 @@
 # For local development (includes core library dependencies)
--e ../wesense-ingester-core[p2p]
+-e ../wesense-ingester-core
 requests>=2.31.0

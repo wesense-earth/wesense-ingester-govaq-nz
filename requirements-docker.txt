@@ -1,5 +1,5 @@
 # Adapter-specific dependencies for wesense-ingester-govaq
-# Core dependencies (clickhouse-connect, paho-mqtt, reverse_geocoder) are
-# provided by wesense-ingester-core installed separately.
+# Core dependencies (clickhouse-connect, paho-mqtt, reverse_geocoder,
+# cryptography, protobuf) are provided by wesense-ingester-core.
 
 requests>=2.31.0
