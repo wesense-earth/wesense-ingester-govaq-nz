@@ -37,14 +37,14 @@ jobs:
         run: echo "ref=${{ github.head_ref || github.ref_name }}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout ingester
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ steps.core-branch.outputs.ref }}
           path: wesense-ingester-govaq-nz
 
       - name: Checkout core library (matching branch, fallback to main)
         id: checkout-core
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: wesense-earth/wesense-ingester-core
           token: ${{ secrets.CORE_REPO_TOKEN || github.token }}
@@ -54,7 +54,7 @@ jobs:
 
       - name: Fallback to core main branch
         if: steps.checkout-core.outcome == 'failure'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: wesense-earth/wesense-ingester-core
           token: ${{ secrets.CORE_REPO_TOKEN || github.token }}
@@ -122,14 +122,14 @@ jobs:
 
     steps:
       - name: Checkout wesense-ingester-govaq-nz
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.head_ref || github.ref_name }}
           path: wesense-ingester-govaq-nz
 
       - name: Checkout core library (matching branch, fallback to main)
         id: checkout-core
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: wesense-earth/wesense-ingester-core
           token: ${{ secrets.CORE_REPO_TOKEN || github.token }}
@@ -139,7 +139,7 @@ jobs:
 
       - name: Fallback to core main branch
         if: steps.checkout-core.outcome == 'failure'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: wesense-earth/wesense-ingester-core
           token: ${{ secrets.CORE_REPO_TOKEN || github.token }}
