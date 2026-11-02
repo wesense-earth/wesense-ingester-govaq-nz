@@ -7,7 +7,7 @@
 # Expects wesense-ingester-core to be available at ../wesense-ingester-core
 # when building with docker-compose (which sets the build context).
 
-FROM python:3.11-slim
+FROM python:3.13-slim
 
 WORKDIR /app
 
